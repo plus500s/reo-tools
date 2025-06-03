@@ -1,11 +1,14 @@
 import time
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from scipy.signal import butter, filtfilt, find_peaks, medfilt
 
 
-def estimate_pulse(data, signal_column="U1", time_column="t", min_bpm=60):
+def estimate_pulse(
+    data: pd.DataFrame, signal_column: str = "U1", time_column: str = "t", min_bpm: int = 60
+) -> dict[str, Any]:
     """
     Estimates pulse (in BPM) from a signal by detecting peaks.
 
@@ -36,11 +39,13 @@ def estimate_pulse(data, signal_column="U1", time_column="t", min_bpm=60):
     return {"sampling_period": sampling_period, "frequency": frequency, "pulse": pulse, "peaks": peaks}
 
 
-def min_max_normalize(series):
+def min_max_normalize(series: pd.Series) -> pd.Series:
     return 2 * (series - series.min()) / (series.max() - series.min()) - 1
 
 
-def smooth_original_signal(original_signal, window_size, num_iterations=3, include_iterations=False):
+def smooth_original_signal(
+    original_signal: np.ndarray, window_size: int, num_iterations: int = 3, include_iterations: bool = False
+) -> dict[str, Any]:
     kernel = np.ones(window_size) / window_size
 
     iteration_signals = []
@@ -64,7 +69,7 @@ def smooth_original_signal(original_signal, window_size, num_iterations=3, inclu
     return result
 
 
-def butter_filter(data, cutoff, btype, sampling_period, order=3):
+def butter_filter(data: np.ndarray, cutoff: float, btype: str, sampling_period: float, order: int = 3) -> np.ndarray:
     sampling_frequency = 1 / sampling_period
     nyquist = 0.5 * sampling_frequency
     normal_cutoff = cutoff / nyquist
@@ -72,7 +77,14 @@ def butter_filter(data, cutoff, btype, sampling_period, order=3):
     return filtfilt(b, a, data)
 
 
-def extract_first_harmonic(signal, frequency, sampling_period, butter_order=3, num_iterations=1, track_time=False):
+def extract_first_harmonic(
+    signal: np.ndarray,
+    frequency: float,
+    sampling_period: float,
+    butter_order: int = 3,
+    num_iterations: int = 1,
+    track_time: bool = False,
+) -> np.ndarray:
     result = signal.copy()
 
     if track_time:
@@ -97,11 +109,11 @@ def extract_first_harmonic(signal, frequency, sampling_period, butter_order=3, n
     return result
 
 
-def find_zero_crossing_indices(signal):
+def find_zero_crossing_indices(signal: np.ndarray) -> np.ndarray:
     return np.where(np.diff(np.sign(signal)) > 0)[0]
 
 
-def align_zero_crossings(*signals):
+def align_zero_crossings(*signals: pd.Series) -> list[pd.Series]:
     """
     Aligns multiple signals based on the second zero-crossing of the first (main) signal.
 
@@ -152,20 +164,22 @@ def align_zero_crossings(*signals):
     return aligned_signals
 
 
-def find_zeros(signal):
+def find_zeros(signal: np.ndarray) -> pd.Series:
     zero_indexes = np.where(np.diff(np.sign(signal)) > 0)[0]
     result = pd.Series(signal[zero_indexes])
     return result
 
 
-def extract_high_freq_signal(signal, first_harmonic, low_cutoff, high_cutoff, sampling_period):
+def extract_high_freq_signal(
+    signal: np.ndarray, first_harmonic: np.ndarray, low_cutoff: float, high_cutoff: float, sampling_period: float
+) -> np.ndarray:
     result = butter_filter(signal, low_cutoff, "high", sampling_period)
     result = butter_filter(result, high_cutoff, "low", sampling_period)
     result -= first_harmonic
     return result
 
 
-def bandpass_filter(signal, low_cutoff, high_cutoff, sampling_period):
+def bandpass_filter(signal: np.ndarray, low_cutoff: float, high_cutoff: float, sampling_period: float) -> np.ndarray:
     result = butter_filter(signal, low_cutoff, "high", sampling_period)
     result = butter_filter(result, high_cutoff, "low", sampling_period)
     return result
@@ -206,7 +220,7 @@ def calculate_derivative(signal: pd.Series, rescale: bool = False) -> pd.Series:
     return derivative
 
 
-def apply_smooth_filter(signal: pd.Series, window: int = 3, drop_index=True) -> pd.Series:
+def apply_smooth_filter(signal: pd.Series, window: int = 3, drop_index: bool = True) -> pd.Series:
     # Validate the rolling window size
     if window < 1 or window % 2 == 0:
         raise ValueError("Rolling window size must be a positive odd integer.")
@@ -250,7 +264,9 @@ def period_to_samples(period: float, sampling_period: float) -> int:
     return int(period // sampling_period)
 
 
-def find_peaks_around_points(signal, center_points, delta1, delta2, DEBUG=False):
+def find_peaks_around_points(
+    signal: pd.Series, center_points: pd.Series, delta1: int, delta2: int, DEBUG: bool = False
+) -> pd.DataFrame:
     peaks = []
 
     max_extend_steps = 10
@@ -297,7 +313,7 @@ def compute_periods(points: pd.Series) -> pd.Series:
     return points.diff().dropna()
 
 
-def apply_median_filter(series: pd.Series, window_size=3) -> pd.Series:
+def apply_median_filter(series: pd.Series, window_size: int = 3) -> pd.Series:
     return medfilt(series, kernel_size=window_size)
 
 
@@ -383,7 +399,7 @@ def define_periods_for_resampling_by_two_segments(
     return result
 
 
-def slice_signal_by_segments(signal: pd.Series, segment_starts: pd.Series, segment_ends: pd.Series) -> list:
+def slice_signal_by_segments(signal: pd.Series, segment_starts: pd.Series, segment_ends: pd.Series) -> list[pd.Series]:
     """
     Slices a signal series based on segment boundaries defined by start and end series.
 
@@ -414,7 +430,7 @@ def slice_signal_by_segments(signal: pd.Series, segment_starts: pd.Series, segme
     return sliced_segments
 
 
-def normalize_segments(segments: list, average_length: int) -> list:
+def normalize_segments(segments: list[pd.Series], average_length: int) -> list[pd.Series]:
     """
     Normalizes segments to a specified average length using interpolation.
 
@@ -450,7 +466,7 @@ def normalize_segments(segments: list, average_length: int) -> list:
     return normalized_segments
 
 
-def average_segment(segments: list) -> pd.Series:
+def average_segment(segments: list[pd.Series]) -> pd.Series:
     """
     Calculate the average of multiple segments (all segments have the same length).
 
@@ -538,7 +554,7 @@ def extend_signal_as_periods(
     return extended.reset_index(drop=True) if reset_index else extended
 
 
-def rescale_signal(signal: pd.Series, min_value: float, max_value: float):
+def rescale_signal(signal: pd.Series, min_value: float, max_value: float) -> tuple[pd.Series, float]:
     """
     Rescales a signal's values to fit within a specified range [min_value, max_value].
     Returns the rescaled signal and the rescaling coefficient.
@@ -589,7 +605,7 @@ def rescale_set_min_preserve_mean(series: pd.Series, new_min: float) -> pd.Serie
     return shifted * scale + new_min
 
 
-def prepare_peaks_sequence(series, required_length=12):
+def prepare_peaks_sequence(series: pd.Series, required_length: int = 12) -> pd.Series:
     # Ensure the series index is sorted
     series = series.sort_index()
 
@@ -622,7 +638,10 @@ def prepare_peaks_sequence(series, required_length=12):
             target_sequence = seq
             break
     if target_sequence is None:
-        target_sequence = max(sequences, key=len, default=None)
+        if sequences:
+            target_sequence = max(sequences, key=len)
+        else:
+            target_sequence = None
 
     if target_sequence is None or target_sequence.empty:
         # If no valid sequence is found, return all NaNs
@@ -666,7 +685,9 @@ def prepare_peaks_sequence(series, required_length=12):
     return result
 
 
-def find_min_max_distance_from_curve_to_line(p1_series, p2_series, center_points, curve_points):
+def find_min_max_distance_from_curve_to_line(
+    p1_series: pd.Series, p2_series: pd.Series, center_points: pd.Series, curve_points: pd.Series
+) -> pd.DataFrame:
     results = []
     curve_x = curve_points.index.to_numpy()
     curve_y = curve_points.values
@@ -715,7 +736,7 @@ def find_min_max_distance_from_curve_to_line(p1_series, p2_series, center_points
     return pd.DataFrame(results)
 
 
-def compute_fft(signal, sampling_period):
+def compute_fft(signal: np.ndarray, sampling_period: float) -> tuple[np.ndarray, np.ndarray]:
     n = len(signal)
     fft_result = np.fft.fft(signal)
     fft_freqs = np.fft.fftfreq(n, sampling_period)

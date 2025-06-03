@@ -1,45 +1,20 @@
-import inspect
 import sys
-from collections.abc import Callable
-from functools import wraps
-from typing import Any
 
-from alive_progress import alive_bar
+FG_BLUE = "\x1b[34m"
+FG_GREEN = "\x1b[32m"
+RESET = "\x1b[0m"
 
 
-def progress_bar(func: Callable[..., Any] = None, *, enabled: bool | Callable[[Any], bool] = True):
-    """
-    Wrap a function so that:
-      • each source line steps the bar (bar())
-      • each print(...) updates bar.text *and* prints below the bar
-      • you can turn it on/off with a bool or a lambda(self)->bool
-    """
-    if func is None:
-        return lambda f: progress_bar(f, enabled=enabled)
+def progress(pct: int, msg: str = "", *, color: bool = True, enabled: bool = True) -> None:
+    """Print a progress message with a percentage and an icon."""
+    if not enabled:
+        return  # Skip progress output if disabled
 
-    src = inspect.getsource(func).splitlines()
-    total = len([line for line in src if line.strip() and not line.strip().startswith("#")])
+    pct = max(0, min(100, pct))
+    token = f"[{pct:03d}] "
 
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        is_enabled = not enabled(args[0]) if callable(enabled) else not enabled
+    clr = FG_GREEN if pct == 100 else FG_BLUE
+    icon = "✔" if pct == 100 else "▶"
+    message = f"{clr}{pct:3d}% {icon} {msg}{RESET}" if color and sys.stdout.isatty() else f"{pct:3d}% {icon} {msg}"
 
-        with alive_bar(
-            total, enrich_print=False, monitor="{percent:.0%}", spinner=None, stats=False, disable=is_enabled
-        ) as bar:
-
-            def tracer(frame, event, arg):
-                if event == "line" and frame.f_code is func.__code__:
-                    bar()
-                return tracer
-
-            sys.settrace(tracer)
-            try:
-                return func(*args, **kwargs)
-            finally:
-                sys.settrace(None)
-                remaining = total - bar.current
-                if remaining > 0:
-                    bar(remaining)
-
-    return wrapper
+    print(f"{token}{message}", flush=True)

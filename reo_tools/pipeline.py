@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from reo_tools.progress import progress_bar
+from reo_tools.progress import progress
 from reo_tools.settings import PipelineSettings
 from reo_tools.utils import (
     align_zero_crossings,
@@ -43,17 +43,23 @@ class SignalPipeline:
             cached = self.cfg.cache_backend.load(scope)
             if cached:
                 return cached
-
+        progress(5, "Reading signal data...", enabled=self.cfg.show_progress)
         rvg_data = self.cfg.reader.read(file_path)
         result = self._process(rvg_data)
 
-        self.cfg.cache_backend.save(scope, result)
+        progress(99, "Saving results...", enabled=self.cfg.show_progress)
+        path = self.cfg.cache_backend.save(scope, result)
+        progress(100, "Done.", enabled=self.cfg.show_progress)
+
+        if self.cfg.debug and path:
+            print(f"\nResults saved to folder: {path}", flush=True)
+
         return result
 
-    @progress_bar(enabled=lambda self: self.cfg.show_progress)
     def _process(self, data: pd.DataFrame) -> Mapping[str, pd.DataFrame]:
         DEBUG = self.cfg.debug
 
+        progress(10, "Estimating pulse...", enabled=self.cfg.show_progress)
         pulse_data = estimate_pulse(data)
         SAMPLING_PERIOD = pulse_data["sampling_period"]
         FREQUENCY = pulse_data["frequency"]
@@ -65,12 +71,12 @@ class SignalPipeline:
         if DEBUG:
             print(f"Heart rate detected: {PULSE:.1f} BPM ({FREQUENCY:.3f} Hz)", flush=True)
 
-        # 0.3 Smooth signal with floating window
+        progress(15, "Smoothing signals...", enabled=self.cfg.show_progress)
         window_size = len(data["U1"]) // len(pulse_data["peaks"])
         data["U1 clean"] = smooth_original_signal(data["U1"], window_size)["cleaned_signal"]
         data["U2 clean"] = smooth_original_signal(data["U2"], window_size)["cleaned_signal"]
 
-        # 1.0 Extract 1st harmonic
+        progress(20, "Extracting 1st harmonic...", enabled=self.cfg.show_progress)
         data["U1-1"] = extract_first_harmonic(
             data["U1 clean"], FREQUENCY, SAMPLING_PERIOD, butter_order=1, num_iterations=5
         )
@@ -78,13 +84,13 @@ class SignalPipeline:
             data["U2 clean"], FREQUENCY, SAMPLING_PERIOD, butter_order=1, num_iterations=5
         )
 
-        # 2.0 Find points where 1st harmonic crosses zeros
+        progress(25, "Aligning zero crossings...", enabled=self.cfg.show_progress)
         u1_1_zeros, u2_1_zeros = align_zero_crossings(data["U1-1"], data["U2-1"])
 
         data["U1-1 zeros"] = u1_1_zeros
         data["U2-1 zeros"] = u2_1_zeros
 
-        # 3.0 Extract high frequency part
+        progress(30, "Extracting high frequency part...", enabled=self.cfg.show_progress)
         low_cutoff = 0.5  # Hz
         high_cutoff = 40  # Hz
         filter_order = 3
@@ -98,11 +104,11 @@ class SignalPipeline:
         data["U1-2"] = data["U1 clean*"] - data["U1-1"]
         data["U2-2"] = data["U2 clean*"] - data["U2-1"]
 
-        # 4.0 Compute derivative of high frequency part of signal and apply smoothing window
+        progress(35, "Computing derivatives and smoothing...", enabled=self.cfg.show_progress)
         data["U1-3"] = get_smoothed_derivative(data["U1-2"], window=5)
         data["U2-3"] = get_smoothed_derivative(data["U2-2"], window=5)
 
-        # 5.0 Find peaks of derivative
+        progress(40, "Finding peaks of derivative...", enabled=self.cfg.show_progress)
         delta1 = 0.01  # 10 ms
         delta2 = 0.03  # 30 ms
 
@@ -125,8 +131,7 @@ class SignalPipeline:
         data["U1-3 peaks"] = u1_3_peaks.set_index("peak_idx")["peak_value"]
         data["U2-3 peaks"] = u2_3_peaks.set_index("peak_idx")["peak_value"]
 
-        # 11.0 Find phase shift (prepare peaks and throws)
-
+        progress(45, "Finding phase shift and extrema...", enabled=self.cfg.show_progress)
         u1_1_peaks = find_peaks_around_points(
             data["U1-1"],
             u1_1_zeros,
@@ -181,14 +186,13 @@ class SignalPipeline:
             period_to_samples(0.001, SAMPLING_PERIOD),
         )
 
-        # 14.1 Find peaks and throws for high frequency part
+        progress(50, "Finding HF extrema...", enabled=self.cfg.show_progress)
         data["U1-2 peaks"] = u1_2_peaks.set_index("peak_idx")["peak_value"]
         data["U1-2 throws"] = -u1_2_throws.set_index("peak_idx")["peak_value"]
 
         data["U2-2 peaks"] = u2_2_peaks.set_index("peak_idx")["peak_value"]
         data["U2-2 throws"] = -u2_2_throws.set_index("peak_idx")["peak_value"]
 
-        # 12.a Find new HF extrema
         u1_2_throws_series = pd.Series(data=-u1_2_throws["peak_value"].values, index=u1_2_throws["peak_idx"].values)
         u1_2_peaks_series = pd.Series(data=u1_2_peaks["peak_value"].values, index=u1_2_peaks["peak_idx"].values)
 
@@ -213,17 +217,14 @@ class SignalPipeline:
         )
         data["U2-2 peaks *"] = pd.Series(data=u2_2_extrema["peak_value"].values, index=u2_2_extrema["peak_idx"].values)
 
-        # 5.0 compute periods
-
+        progress(55, "Computing periods and filtering...", enabled=self.cfg.show_progress)
         u1_2_throw_new_times = data["t"].loc[u2_2_extrema["throw_idx"]]
 
         periods1 = pd.DataFrame({"t": u1_2_throw_new_times[1:]})
         periods1["T1*"] = compute_periods(u1_2_throw_new_times)
 
-        # 6.0 Apply median filter to periods
         periods1["T1**"] = apply_median_filter(periods1["T1*"])
 
-        # 7.0 Find mean and sigma for periods
         T1_mean = periods1["T1**"].mean()
         T1_sigma = periods1["T1**"].std()
         T1_sigma_before_filter = periods1["T1*"].std()
@@ -234,14 +235,12 @@ class SignalPipeline:
         periods1["+ 2 sigma1 (before filter)"] = T1_mean + 2 * T1_sigma_before_filter
         periods1["- 2 sigma1 (before filter)"] = T1_mean - 2 * T1_sigma_before_filter
 
-        # 8.0 Find consecutive period series
         periods1["T1** valid"] = filter_valid_periods(periods1["T1*"], T1_mean, T1_sigma)
 
         valid_periods = periods1["T1** valid"].reset_index(drop=True)
         t = periods1["t"].reset_index(drop=True)
 
-        # 12.0 Find average peak to peak value for first harmonic
-
+        progress(60, "Calculating average peak-to-peak values...", enabled=self.cfg.show_progress)
         first_harmonic_amplitudes = pd.DataFrame({"valid period": valid_periods})
 
         first_harmonic_amplitudes["p2p 1"] = u1_1_peaks["peak_value"] + u1_1_throws["peak_value"]
@@ -258,8 +257,7 @@ class SignalPipeline:
         first_harmonic_amplitudes["p2p 1 mean"] = u1_1_p2p_mean
         first_harmonic_amplitudes["p2p 2 mean"] = u2_1_p2p_mean
 
-        # 11.0 Find phase shift (prepare peaks and throws)
-
+        progress(65, "Calculating phases...", enabled=self.cfg.show_progress)
         phases = pd.DataFrame({"t": t, "valid period": valid_periods})
 
         phases["fi1"] = calculate_phases(u1_1_zeros.index, u1_2_throws["peak_idx"], T1_mean, SAMPLING_PERIOD).iloc[1:]
@@ -302,8 +300,7 @@ class SignalPipeline:
         phases["fi2 mean*"] = fi2_mean_
         phases["fi_hf mean*"] = fi_hf_mean_
 
-        # 14.2 Find mean for alpha, gamma
-
+        progress(70, "Resampling period segments...", enabled=self.cfg.show_progress)
         resampling_periods1 = define_periods_for_resampling_by_two_segments(
             u1_2_peaks["peak_idx"], u1_2_throws["peak_idx"], valid_periods
         )
@@ -317,8 +314,6 @@ class SignalPipeline:
 
         # alpha2_mean = round((resampling_periods2['gamma_idx'] - resampling_periods2['alpha_idx']).mean())
         # gamma2_mean = round((resampling_periods2['end_idx'] - resampling_periods2['gamma_idx']).mean())
-
-        # 14.3 Resample period segments
 
         u1_1_aplha1_segments = slice_signal_by_segments(
             data["U1-1"], resampling_periods1["alpha_idx"], resampling_periods1["gamma_idx"] - 1
@@ -360,8 +355,7 @@ class SignalPipeline:
         u2_2_aplha2_normalized_segments = normalize_segments(u2_2_aplha2_segments, alpha1_mean)
         u2_2_gamma2_normalized_segments = normalize_segments(u2_2_gamma2_segments, gamma1_mean)
 
-        # 14.4 Calculate avg period
-
+        progress(75, "Averaging period segments...", enabled=self.cfg.show_progress)
         u1_1_alpha1_avg = average_segment(u1_1_aplha1_normalized_segments)
         u1_1_gamma1_avg = average_segment(u1_1_gamma1_normalized_segments)
 
@@ -374,8 +368,7 @@ class SignalPipeline:
         u2_2_alpha2_avg = average_segment(u2_2_aplha2_normalized_segments)
         u2_2_gamma2_avg = average_segment(u2_2_gamma2_normalized_segments)
 
-        # 15.0 Detrend average period
-
+        progress(80, "Detrending average period...", enabled=self.cfg.show_progress)
         u1_1_avg = pd.concat([u1_1_alpha1_avg, u1_1_gamma1_avg], ignore_index=True)
         u1_2_avg = pd.concat([u1_2_alpha1_avg, u1_2_gamma1_avg], ignore_index=True)
         u2_1_avg = pd.concat([u2_1_alpha2_avg, u2_1_gamma2_avg], ignore_index=True)
@@ -418,7 +411,6 @@ class SignalPipeline:
         u2_avg_detrended_ext = u2_1_avg_detrended_ext + u2_2_avg_detrended_ext
 
         period_length_samples = len(u1_1_avg)
-        # should be minus according to the previous calculations
         shift_samples = -int(round((fi_hf_mean / 360.0) * period_length_samples))
         u2_avg_detrended_ext_aligned = pd.Series(
             np.roll(u2_avg_detrended_ext.values * K, shift_samples), index=u2_avg_detrended_ext.index
@@ -428,6 +420,7 @@ class SignalPipeline:
             np.roll(u2_avg_detrended_ext.values, shift_samples), index=u2_avg_detrended_ext.index
         )
 
+        progress(85, "Preparing average period DataFrame...", enabled=self.cfg.show_progress)
         df = pd.DataFrame(
             {
                 "idx": np.arange(len(u1_avg_detrended_ext)),
@@ -442,7 +435,6 @@ class SignalPipeline:
             }
         )
 
-        # important points
         df["U1-3 avg period"] = get_smoothed_derivative(df["U1-2 avg period"], window=5)
         df["U2-3 avg period"] = get_smoothed_derivative(df["U2-2 avg period"], window=5)
 
@@ -505,7 +497,6 @@ class SignalPipeline:
         df["U2-2 avg period peaks"] = u2_2_avg_peaks.set_index("peak_idx")["peak_value"]
         df["U2-2 avg period throws"] = -u2_2_avg_throws.set_index("peak_idx")["peak_value"]
 
-        # Find new HF extrema
         u1_2_avg_throws_series = pd.Series(
             data=-u1_2_avg_throws["peak_value"].values, index=u1_2_avg_throws["peak_idx"].values
         )
@@ -542,15 +533,12 @@ class SignalPipeline:
             data=u2_2_avg_extrema["peak_value"].values, index=u2_2_avg_extrema["peak_idx"].values
         )
 
-        # 16.0 Convert first channel average period to pressure curve
-
+        progress(90, "Converting to pressure curves...", enabled=self.cfg.show_progress)
         min_pressure = 80
         max_pressure = 120
 
         pressure1, rescaling_koef = rescale_signal(u1_avg_detrended_ext, min_pressure, max_pressure)
         avg_pressure1 = pressure1.mean()
-
-        # 17.0 Convert first channel average period to pressure curve
 
         pressure2 = avg_pressure1 + rescaling_koef * u2_avg_detrended_ext_aligned
         avg_pressure2 = pressure2.mean()
@@ -573,8 +561,7 @@ class SignalPipeline:
         df["P aortal (same min and avg)"] = pressure2_aligned_by_min_and_avg
         df["P aortal (same min and avg) avg"] = avg_pressure2_aligned_by_min_and_avg
 
-        # 18.0 FFT analysis
-
+        progress(93, "Performing FFT analysis...", enabled=self.cfg.show_progress)
         fft_freqs, fft_ampl_u1_clean = compute_fft(data["U1 clean"], SAMPLING_PERIOD)
         _, fft_ampl_u1_1 = compute_fft(data["U1-1"], SAMPLING_PERIOD)
         _, fft_ampl_u1_2 = compute_fft(data["U1-2"], SAMPLING_PERIOD)
@@ -594,8 +581,7 @@ class SignalPipeline:
             }
         )
 
-        # =================================== PREPARE DATASETS ===========================================
-
+        progress(97, "Preparing output datasets...", enabled=self.cfg.show_progress)
         data.drop(columns=["U1 clean*", "U2 clean*"], inplace=True)
 
         data.set_index("t", inplace=True)
