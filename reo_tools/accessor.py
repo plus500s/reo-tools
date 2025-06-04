@@ -1,12 +1,3 @@
-# accessor.py
-"""Result accessor for pipeline outputs.
-
-Provides convenient read-only access to cached or freshly computed DataFrames:
-  - list available datasets
-  - retrieve column names (headers)
-  - fetch a full DataFrame or a single column
-"""
-
 from collections.abc import Mapping
 
 import pandas as pd

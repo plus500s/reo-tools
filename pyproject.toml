@@ -17,10 +17,11 @@ dependencies = [
 dev = [
     "pre-commit>=4.0.1,<5.0.0",
     "ruff>=0.7.4,<1.0.0",
+    "pyinstaller>=6.13.0,<7.0.0",
 ]
 
 [project.scripts]
-rvg = "reo_tools.__main__:cli"
+reo-tools = "reo_tools.cli:main"
 
 [build-system]
 requires = ["hatchling"]
