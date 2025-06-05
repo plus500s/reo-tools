@@ -37,7 +37,9 @@ class DataCache(ABC):
         ...
 
     @abstractmethod
-    def load(self, scope: str | None, columns: Sequence[str] | None = None) -> Mapping[str, pd.DataFrame] | None:
+    def load(
+        self, scope: str | None, dataset_name: str | None = None, columns: Sequence[str] | None = None
+    ) -> Mapping[str, pd.DataFrame] | None:
         """Load all cached DataFrames under the given scope."""
         ...
 
@@ -72,7 +74,7 @@ class NoOpCache(DataCache):
     def save(self, scope: str | None, data: Mapping[str, Any]) -> Path:
         return Path()
 
-    def load(self, scope: str | None, columns: Sequence[str] | None = None) -> None:
+    def load(self, scope: str | None, dataset_name: str | None = None, columns: Sequence[str] | None = None) -> None:
         return None
 
     def delete(self, scope: str | None) -> None:
@@ -91,8 +93,6 @@ class ParquetCache(DataCache):
     EXT = ".parquet"
 
     def save(self, scope: str | None, data: Mapping[str, pd.DataFrame]) -> Path:
-        if pq is None:
-            raise RuntimeError("pyarrow is not installed – cannot use ParquetCache")
         target = self._scope_dir(scope, create=True)
         for name, df in data.items():
             path = target / f"{name}{self.EXT}"
@@ -100,14 +100,25 @@ class ParquetCache(DataCache):
             pq.write_table(table, path)
         return target
 
-    def load(self, scope: str | None, columns: Sequence[str] | None = None) -> Mapping[str, pd.DataFrame] | None:
-        if pq is None:
-            raise RuntimeError("pyarrow is not installed – cannot use ParquetCache")
+    def load(
+        self, scope: str | None, dataset_name: str | None = None, columns: Sequence[str] | None = None
+    ) -> Mapping[str, pd.DataFrame] | None:
         target = self._scope_dir(scope)
         out: dict[str, pd.DataFrame] = {}
-        for path in target.glob(f"*{self.EXT}"):
+
+        if dataset_name:
+            file_path = target / f"{dataset_name}{self.EXT}"
+            candidates = [file_path] if file_path.exists() else []
+        else:
+            candidates = list(target.glob(f"*{self.EXT}"))
+
+        for path in candidates:
             name = path.stem
-            table = pq.read_table(path, columns=columns if columns else None)
+            try:
+                table = pq.read_table(path, columns=columns if columns else None)
+            except Exception:
+                continue
+
             out[name] = table.to_pandas()
         return out or None
 
@@ -126,16 +137,28 @@ class CSVCache(DataCache):
             pcsv.write_csv(table, path, write_options=opts)
         return target
 
-    def load(self, scope: str | None, columns: Sequence[str] | None = None) -> Mapping[str, pd.DataFrame] | None:
+    def load(
+        self, scope: str | None, dataset_name: str | None = None, columns: Sequence[str] | None = None
+    ) -> Mapping[str, pd.DataFrame] | None:
         target = self._scope_dir(scope)
         out: dict[str, pd.DataFrame] = {}
-        for path in target.glob(f"*{self.EXT}"):
+
+        if dataset_name:
+            file_path = target / f"{dataset_name}{self.EXT}"
+            candidates = [file_path] if file_path.exists() else []
+        else:
+            candidates = list(target.glob(f"*{self.EXT}"))
+
+        for path in candidates:
             name = path.stem
             read_opts = pcsv.ReadOptions(use_threads=True)
             parse_opts = pcsv.ParseOptions()
             convert_opts = pcsv.ConvertOptions(column_types=None, include_columns=columns or None)
-            table = pcsv.read_csv(
-                str(path), read_options=read_opts, parse_options=parse_opts, convert_options=convert_opts
-            )
+            try:
+                table = pcsv.read_csv(
+                    str(path), read_options=read_opts, parse_options=parse_opts, convert_options=convert_opts
+                )
+            except Exception:
+                continue
             out[name] = table.to_pandas()
         return out or None
